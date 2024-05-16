@@ -1,0 +1,26 @@
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: /root/workspace/out/modelnet40/hydra/
+setup:
+  seed: 1
+  device: cuda
+  sweep: False
+  train: True
+  wandb_dir: /root/workspace/out/modelnet40
+load:
+  batch_size: 1024 #1024-max 96-default
+  property: alpha
+  load_checkpoint: False
+  checkpoint_path: /root/workspace/out/modelnet40/noname.pt
+train:
+  epochs: 1000
+  patience: 100
+  lr : .001
+  wd : 1e-16
+model:
+  hidden_channels: 128 
+  hidden_layers: 7
+  attention: 1
+  node_attr: 0
