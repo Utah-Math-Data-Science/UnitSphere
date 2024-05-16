@@ -3,6 +3,9 @@
     Faster IO than ModelNetDataset in the first epoch.
 '''
 
+from typing import Optional
+import time
+
 import os
 import sys
 import numpy as np
@@ -15,7 +18,7 @@ import data_perturbations as provider
 
 
 import torch
-from torch_geometric.data import InMemoryDataset, Data
+from torch_geometric.data import InMemoryDataset, Data, DataLoader
 from torch_geometric.transforms import RadiusGraph, KNNGraph
 
 
@@ -147,6 +150,7 @@ class ModelNetH5Geometric(InMemoryDataset):
         self.test_loader = ModelNetH5Dataset('/root/workspace/data/modelnet40_ply_hdf5_2048/test_files.txt')
 
         train_data = []
+        start = time.time()
         while self.train_loader.has_next_batch():
             bdata, blabel = self.train_loader.next_batch()
             for i in range(bdata.shape[0]):
@@ -161,13 +165,32 @@ class ModelNetH5Geometric(InMemoryDataset):
                 data = self.conn_dict[self.connectivity](data)
                 test_data.append(data)
 
-        print(train_data[0])
-        print(len(train_data), len(test_data))
-        exit()
+        print(f'Processing time: {time.time()-start}')
         #data, slices = self.collate(train_data_list)
         #torch.save((data, slices), self.processed_paths[0])
         #data, slices = self.collate(test_data_list)
         #torch.save((data, slices), self.processed_paths[1])
+
+
+def modelnet40_dataloaders(
+    connectivity : str = 'radius',
+    radius : Optional[float] = None,
+    k : Optional[int] = None,
+    batch_size : int = 128,
+):
+
+    assert(connectivity in ['knn', 'radius']), f'Connectivity not recognized: {connectivity}'
+    assert((connectivity!='radius') or (radius is not None)),f'Radial connectivity and radius do not match {connectivity,radius}'
+    assert((connectivity!='knn') or (k is not None)),f'KNN connectivity and k do not match {connectivity,k}'
+
+    dataset = ModelNetH5Geometric('/root/workspace/data/modelnet40_ply_hdf5_2048', connectivity, radius, k)
+
+    train_datalist, test_datalist = dataset.train_data, dataset.test_data
+
+    train_loader = DataLoader(train_datalist, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_datalist, batch_size=batch_size, shuffle=False)
+
+    return dataset, train_datalist, test_datalist, train_loader, test_loader
 
 
 if __name__=='__main__':

@@ -27,8 +27,10 @@ from torch_geometric.utils import remove_self_loops
 import torch_geometric.transforms as T
 
 #TODO: Adjust these	imports
-sys.path.append('./dataset/', './models/')    
-from modelnet40 import ModelNetH5Geometric
+import sys
+sys.path.append('./dataset/')
+from modelnetH5 import modelnet40_dataloaders
+sys.path.append('./models/')
 from schnet import SchNet
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -117,15 +119,10 @@ def setup(cfg):
 def load(cfg):
     args = cfg.load
 
-    dataset, _, _, _, train_dl, val_dl, test_dl = qm9_dataloaders(
-        target = args['property'],
-        featurization = 'cormorant',
-        all_features = True,
-        adjacency = 'full',
-        radius = None,
-        o3_attr = False,
-        lmax_attr =  None,
-        split = 'random_76/14/10',
+    dataset = modelnet40_dataloaders(
+        connectivity = args['connectivity'],
+        radius = args['radius'],
+        k = args['k'],
         batch_size = args['batch_size'],
     )
 
@@ -270,9 +267,9 @@ def run_modelnet40(cfg):
     wandb.init(entity='utah-math-data-science',
                 project='umds-baselines',
                 mode='disabled',
-                name='egnn-'+cfg.load['property'],
+                name=cfg.model['name'],
                 dir='/root/workspace/out/',
-                tags=['modelnet40', cfg.model['name'], cfg.load['property']],
+                tags=['modelnet40', cfg.model['name']],
                 config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
     )
     

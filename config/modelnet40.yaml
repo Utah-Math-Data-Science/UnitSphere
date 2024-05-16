@@ -10,8 +10,10 @@ setup:
   train: True
   wandb_dir: /root/workspace/out/modelnet40
 load:
+  connectivity: radius
+  radius: 0.1
+  k: 4
   batch_size: 1024 #1024-max 96-default
-  property: alpha
   load_checkpoint: False
   checkpoint_path: /root/workspace/out/modelnet40/noname.pt
 train:
@@ -20,6 +22,7 @@ train:
   lr : .001
   wd : 1e-16
 model:
+  name: schnet
   hidden_channels: 128 
   hidden_layers: 7
   attention: 1
