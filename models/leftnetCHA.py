@@ -8,7 +8,8 @@ from torch.nn import Embedding
 
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
-from torch_scatter import scatter
+from torch_scatter import scatter, scatter_min
+from comenet_features import angle_emb_hull, torsion_emb_hull
 
 def nan_to_num(vec, num=0.0):
     idx = torch.isnan(vec)
@@ -21,6 +22,86 @@ def _normalize(vec, dim=-1):
 
 def swish(x):
     return x * torch.sigmoid(x)
+
+def get_angle_torsion(edge_index,
+                      vecs, dist,
+                      num_nodes,
+                      cutoff=9999):
+    j, i = edge_index
+
+    # Calculate distances.
+    _, argmin0 = scatter_min(dist, i, dim_size=num_nodes)
+    argmin0[argmin0 >= len(i)] = 0
+    n0 = j[argmin0]
+    add = torch.zeros_like(dist).to(dist.device)
+    add[argmin0] = cutoff
+    dist1 = dist + add
+
+    _, argmin1 = scatter_min(dist1, i, dim_size=num_nodes)
+    argmin1[argmin1 >= len(i)] = 0
+    n1 = j[argmin1]
+    # --------------------------------------------------------
+
+    _, argmin0_j = scatter_min(dist, j, dim_size=num_nodes)
+    argmin0_j[argmin0_j >= len(j)] = 0
+    n0_j = i[argmin0_j]
+
+    add_j = torch.zeros_like(dist).to(dist.device)
+    add_j[argmin0_j] = cutoff
+    dist1_j = dist + add_j
+
+    # i[argmin] = range(0, num_nodes)
+    _, argmin1_j = scatter_min(dist1_j, j, dim_size=num_nodes)
+    argmin1_j[argmin1_j >= len(j)] = 0
+    n1_j = i[argmin1_j]
+
+    # ----------------------------------------------------------
+
+    # n0, n1 for i
+    n0 = n0[i]
+    n1 = n1[i]
+
+    # n0, n1 for j
+    n0_j = n0_j[j]
+    n1_j = n1_j[j]
+
+
+    mask_iref = n0 == j
+    iref = torch.clone(n0)
+    iref[mask_iref] = n1[mask_iref]
+    idx_iref = argmin0[i]
+    idx_iref[mask_iref] = argmin1[i][mask_iref]
+
+    mask_jref = n0_j == i
+    jref = torch.clone(n0_j)
+    jref[mask_jref] = n1_j[mask_jref]
+    idx_jref = argmin0_j[j]
+    idx_jref[mask_jref] = argmin1_j[j][mask_jref]
+
+    pos_ji, pos_in0, pos_in1, pos_iref, pos_jref_j = (
+        vecs,
+        vecs[argmin0][i],
+        vecs[argmin1][i],
+        vecs[idx_iref],
+        vecs[idx_jref]
+    )
+
+    # Calculate angles.
+    a = ((-pos_ji) * pos_in0).sum(dim=-1)
+    b = torch.cross(-pos_ji, pos_in0).norm(dim=-1)
+    theta = torch.atan2(b, a)
+    theta[theta < 0] = theta[theta < 0] + math.pi
+
+    # Calculate torsions.
+    dist_ji = pos_ji.pow(2).sum(dim=-1).sqrt()
+    plane1 = torch.cross(-pos_ji, pos_in0)
+    plane2 = torch.cross(-pos_ji, pos_in1)
+    a = (plane1 * plane2).sum(dim=-1)  # cos_angle * |plane1| * |plane2|
+    b = (torch.cross(plane1, plane2) * pos_ji).sum(dim=-1) / dist_ji
+    phi = torch.atan2(b, a)
+    phi[phi < 0] = phi[phi < 0] + math.pi
+
+    return theta, phi
 
 ## radial basis function to embed distances
 class rbf_emb(nn.Module):
@@ -179,23 +260,40 @@ class EquiMessagePassingHull(MessagePassing):
             self,
             hidden_channels,
             fea_dim1=3,
-            fea_dim2=2
+            fea_dim2=2,
+            isangle_emb_hull=False,
+            pos_require_grad=False
     ):
         super(EquiMessagePassingHull, self).__init__(aggr="add", node_dim=0)
 
         self.hidden_channels = hidden_channels
-
-        self.x_proj = nn.Sequential(
-            nn.Linear(hidden_channels, hidden_channels),
-            nn.SiLU(),
-            nn.Linear(hidden_channels, hidden_channels),
-        )
-        self.fea_proj = nn.Sequential(
-                            nn.Linear(fea_dim1+fea_dim2, hidden_channels),
-                            nn.SiLU(),
-                            nn.Linear(hidden_channels, hidden_channels),
-                            nn.SiLU()
-                            )
+        self.pos_require_grad = pos_require_grad
+        if pos_require_grad:
+            self.x_proj = nn.Sequential(
+                nn.Linear(hidden_channels, hidden_channels*2),
+                nn.SiLU(),
+                nn.Linear(hidden_channels*2, hidden_channels*4),
+            )
+        else:
+            self.x_proj = nn.Sequential(
+                nn.Linear(hidden_channels, hidden_channels),
+                nn.SiLU(),
+                nn.Linear(hidden_channels, hidden_channels),
+            )
+        if isangle_emb_hull:
+            self.fea_proj = nn.Sequential(
+                                nn.Linear(fea_dim1+fea_dim2*2, hidden_channels),
+                                nn.Sigmoid(),
+                                nn.Linear(hidden_channels, hidden_channels),
+                                nn.Sigmoid()
+                                )
+        else:
+            self.fea_proj = nn.Sequential(
+                                nn.Linear(fea_dim1+fea_dim2, hidden_channels),
+                                nn.SiLU(),
+                                nn.Linear(hidden_channels, hidden_channels),
+                                nn.SiLU()
+                                )
 
         self.reset_parameters()
 
@@ -213,9 +311,12 @@ class EquiMessagePassingHull(MessagePassing):
     def forward(self, x, vec, 
                 edge_index_hull, fea1_hull, fea2_hull
                 ):
-
+        # print(torch.mean(fea1_hull))
+        # print(torch.mean(fea2_hull))
         xh = self.x_proj(x)
+        #print(torch.mean(xh))
         fea_hull = self.fea_proj(torch.cat([fea1_hull, fea2_hull], dim=1))
+        #print(torch.mean(fea_hull))
         # propagate_type: (xh: Tensor, vec: Tensor, rbfh_ij: Tensor, r_ij: Tensor)
         dx, dvec = self.propagate(
             edge_index_hull,
@@ -229,9 +330,18 @@ class EquiMessagePassingHull(MessagePassing):
         return dx, dvec
 
     def message(self, xh_j, vec_j, rbfh_ij, r_ij):
-        x = xh_j * rbfh_ij
-        vec = torch.zeros(size=[x.shape[0], 3, x.shape[1]], 
-                          device=x.device)
+        if self.pos_require_grad:
+            x = xh_j[:,:self.hidden_channels] * rbfh_ij
+            v1 = xh_j[:,self.hidden_channels:self.hidden_channels*2] * rbfh_ij
+            v2 = xh_j[:,self.hidden_channels*2:self.hidden_channels*3] * rbfh_ij
+            v3 = xh_j[:,self.hidden_channels*3:] * rbfh_ij
+            vec = torch.cat([v1.unsqueeze(1), 
+                             v2.unsqueeze(1), 
+                             v3.unsqueeze(1)], dim=1)
+        else:
+            x = xh_j * rbfh_ij
+            vec = torch.zeros(size=[x.shape[0], 3, x.shape[1]], 
+                            device=x.device)
         return x, vec
 
     def aggregate(
@@ -427,10 +537,12 @@ class LEFTNetCHA(torch.nn.Module):
     def __init__(
             self, pos_require_grad=False, cutoff=5.0, num_layers=4,
             hidden_channels=128, out_channels=1, 
-            num_radial=32, y_mean=0, y_std=1, 
+            num_radial=32,
+            y_mean=0, y_std=1, 
             cha_rate = 0.5,
             cha_scale = 1,
             hull_cos=False,
+            isangle_emb_hull = False,
             **kwargs):
         super(LEFTNetCHA, self).__init__()
         self.y_std = y_std
@@ -449,9 +561,10 @@ class LEFTNetCHA(torch.nn.Module):
             nn.Linear(hidden_channels, hidden_channels))
         
         self.neighbor_emb = NeighborEmb(hidden_channels)
-
+        self.feature_emb_hull = torsion_emb_hull(num_radial=2, 
+                                                 num_spherical=2)
         self.S_vector = S_vector(hidden_channels)
-
+        self.isangle_emb_hull = isangle_emb_hull
         self.lin = nn.Sequential(
             nn.Linear(3, hidden_channels // 4),
             nn.SiLU(inplace=True),
@@ -467,9 +580,21 @@ class LEFTNetCHA(torch.nn.Module):
             self.message_layers.append(
                 EquiMessagePassing(hidden_channels, num_radial).jittable()
             )
-            self.message_hull_layers.append(
-                EquiMessagePassingHull(hidden_channels).jittable()
-            )
+            if isangle_emb_hull:
+                self.message_hull_layers.append(
+                    EquiMessagePassingHull(hidden_channels,
+                                        fea_dim1=8,
+                                        fea_dim2=2,
+                                        isangle_emb_hull=True,
+                                        pos_require_grad=pos_require_grad).jittable()
+                )
+            else:
+                self.message_hull_layers.append(
+                    EquiMessagePassingHull(hidden_channels,
+                                        fea_dim1=3,
+                                        fea_dim2=2,
+                                        pos_require_grad=pos_require_grad).jittable()
+                )
             self.FTEs.append(FTE(hidden_channels))
 
         self.last_layer = nn.Linear(hidden_channels, out_channels)
@@ -562,7 +687,24 @@ class LEFTNetCHA(torch.nn.Module):
         
         # convex hull feature embedding
         edge_index_hull, edge_attr_hull, r = batch_data.edge_index_hull, batch_data.edge_attr_hull, batch_data.posr
-        fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        # fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        dist_hull = edge_attr_hull[:, 0]
+        vecs_hull = edge_attr_hull[:, 1:]
+        i_hull, j_hull = edge_index_hull
+        theta_hull, phi_hull = get_angle_torsion(edge_index = edge_index_hull,
+                                                 vecs = vecs_hull, 
+                                                 dist = dist_hull,
+                                                 num_nodes = z.size(0))
+        if self.isangle_emb_hull:
+            fea1_hull = self.feature_emb_hull(dist_hull, theta_hull, phi_hull)
+            fea2_hull = torch.cat([r[i_hull].unsqueeze(1), r[j_hull].unsqueeze(1),
+                                   r[i_hull].unsqueeze(1), r[j_hull].unsqueeze(1)], dim=1)
+        else:
+            fea1_hull = torch.cat([dist_hull.unsqueeze(1),
+                                   theta_hull.unsqueeze(1),
+                                   phi_hull.unsqueeze(1)], dim=1)
+            fea2_hull = torch.cat([r[i_hull].unsqueeze(1), 
+                                   r[j_hull].unsqueeze(1)], dim=1)  
 
         for i in range(self.num_layers):
             # equivariant message passing
