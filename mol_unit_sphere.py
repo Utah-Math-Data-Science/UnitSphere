@@ -161,6 +161,30 @@ class Frame(metaclass=ABCMeta):
     def align_center(self, pointcloud):
         return pointcloud - np.mean(pointcloud,axis=0)
 
+    def get_hull_geometric_info(self, shell_data, 
+                                adj_list,
+                                shell_rank):
+        # Project edges onto relative plane
+        s_feature = {}
+
+        for point in adj_list.keys():
+            r_ij = shell_data[adj_list[point]]-shell_data[point]
+            if shell_rank == 1:
+                d_ij = np.zeros_like(np.linalg.norm(r_ij, axis=1))
+            else:
+                d_ij = np.linalg.norm(r_ij, axis=1)
+            lst = {}
+            for ct in range(len(r_ij)):
+                lst[adj_list[point][ct]] = (
+                                            d_ij[ct],
+                                            (r_ij[ct][0],
+                                             r_ij[ct][1],
+                                             r_ij[ct][2],
+                                             )
+                                            )
+
+            s_feature[point] = lst
+        return s_feature
    
     def geometric_encoding(self, shell_data, 
                            adj_list, 
@@ -379,10 +403,16 @@ class Frame(metaclass=ABCMeta):
             key1 = proj_id_rcrd_rvrs[edge_index_hull[0][i]]
             key2 = proj_id_rcrd_rvrs[edge_index_hull[1][i]]
             temp = s_feature[key1][key2]
+            # attr_arr.append(
+            #         [temp[0], 
+            #          temp[1][0], 
+            #          temp[1][1]]
+            #     )
             attr_arr.append(
                     [temp[0], 
-                     temp[1][0], 
-                     temp[1][1]]
+                    temp[1][0], 
+                    temp[1][1], 
+                    temp[1][2]]
                 )
         return attr_arr
 
@@ -435,85 +465,21 @@ class Frame(metaclass=ABCMeta):
 
         # GET GEOMETRIC ENCODING
         adj_list = build_adjacency_list(shell_graph)
-        dg = direct_graph(shell_graph)
-        g_hash, g_encoding, s_feature = self.geometric_encoding(shell_data, 
-                                                                adj_list, 
-                                                                shell_rank, 
-                                                                )
 
-        # COMBINE ENCODINGS
-        n_encoding = {}
-        # for each node combine ENCODINGS
-        # for i in range(shell_n):
-        #     n_encoding[i] = (r_encoding[i], g_encoding[i])
-
-        ### modified by hyh ###
-        # temp = self.get_merged_edge_index(adj_list,
-        #                                   shell_data_proj_id_rcrd,
-        #                                   data_edge_index)
-        # merged_edge_index = dict(sorted(temp.items()))
+        s_feature = self.get_hull_geometric_info(shell_data, 
+                                                 adj_list, 
+                                                 shell_rank, 
+                                                 )
         
         rcvr_adj_list = self.get_recover_adj(adj_list, shell_data_proj_id_rcrd)
 
         edge_index_hull = self.adj_arr(rcvr_adj_list)
-        # merged_coord = self.merge_coord_info(
-        #                                     data,
-        #                                     s_feature,
-        #                                     shell_data_proj_id_rcrd
-        #                                     )
+
         edge_attr_hull = self.edge_attr_arr(s_feature,
                                             shell_data_proj_id_rcrd_rvrs,
                                             edge_index_hull)
         radial_arr = self.get_radial_arr(data)
     
-        # merged_feature = self.merge_feature(merged_coord, edge_index_hull, edge_attr_hull)
-        
-        # ### debug
-        # print(merged_feature)
-        # for key in merged_feature:
-        #     print('\nNode No.{}'.format(key))
-        #     for k in merged_feature[key]:
-        #         print("{}: {}".format(k, merged_feature[key][k]))
-        # ###
-
-        # # CONSTRUCT DFA
-        # dfa, edge_encoding = self.construct_dfa(n_encoding, dg)
-        # self.hopcroft = PartitionRefinement(dfa)
-        # out = self.hopcroft.refine(dfa)
-
-        # sorted_edges, sorted_graph = self.convert_partition(dist_hash, g_hash, r_encoding, g_encoding)
-        # print(sorted_graph)
-        # print(len(edge_encoding),len(self.hopcroft._partition))
-        # pth = self.traverse(sorted_graph, shell_data, shell_rank)
-        # data, shell_data = self.align(data, shell_data, cat_data, pth)
-                
-        # fig = plt.figure(tight_layout=True)
-        # ax = fig.add_subplot(111, projection='3d')
-        # plot_projection(ax, data, cat_data, shell_data)
-        # plt.savefig(f'./projection.pdf',format='pdf',bbox_inches='tight')
-        # plt.show()
-        # plt.close()
-
-                
-        # fig = plt.figure(tight_layout=True)
-        # ax = fig.add_subplot(111, projection='3d')
-        # plot_projection(ax, data, cat_data, shell_data, edges=shell_graph)
-        # plt.savefig(f'./graph.pdf',format='pdf',bbox_inches='tight')
-        # plt.show()
-        # plt.close()
-
-        # k_lst = [0,2,3]
-        # for idx,k in enumerate(k_lst):
-        #     cycle = [[1,k],[k,k_lst[idx-1]],[k_lst[idx-1],1]]
-        #     print(cycle)
-                            
-        #     fig = plt.figure(tight_layout=True)
-        #     ax = fig.add_subplot(111, projection='3d')
-        #     plot_projection(ax, data, cat_data, shell_data, edges=shell_graph, cycle=cycle)
-        #     plt.savefig(f'./cycle_{idx}.pdf',format='pdf',bbox_inches='tight')
-        #     plt.show()
-        #     plt.close()
-        
         return data, cat_data, edge_index_hull, edge_attr_hull, radial_arr
 
 np.random.seed(1)
