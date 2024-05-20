@@ -160,11 +160,9 @@ def run_training(cfg, model, train_dl):
         
         wandb.log({'epoch':epoch,
             'train_loss':train_loss,
-            'lr':lr,
             'time':end-start})
         print(f'Epoch({epoch}) '
             f'| train({train_loss:.4f}) '
-            f'| lr({lr:.2e}) '
             f'| time({end-start:.4f})'
             f'\n')
 
