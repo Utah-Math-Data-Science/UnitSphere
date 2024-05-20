@@ -10,10 +10,11 @@ setup:
   train: True
   wandb_dir: /root/workspace/out/modelnet40
 load:
-  connectivity: radius
+  connectivity: knn
   radius: 0.1
   k: 4
-  batch_size: 1024 #1024-max 96-default
+  batch_size: 2 #1024-max 96-default
+  force_reload: False
   load_checkpoint: False
   checkpoint_path: /root/workspace/out/modelnet40/noname.pt
 train:

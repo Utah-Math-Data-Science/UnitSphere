@@ -357,7 +357,8 @@ class ComENet(nn.Module):
         pos = data.pos
         num_nodes = z.size(0)
 
-        edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
+        #edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
+        edge_index = data.edge_index
         j, i = edge_index
 
         vecs = pos[j] - pos[i]
@@ -365,6 +366,7 @@ class ComENet(nn.Module):
 
         # Embedding block.
         x = self.emb(z)
+        x = x.squeeze(1)
         if self.iscovhull:
             x_tilde = self.emb(z)
 

@@ -13,14 +13,13 @@ import h5py
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(BASE_DIR)
 ROOT_DIR = BASE_DIR
-sys.path.append(os.path.join(ROOT_DIR, 'utils'))
 import data_perturbations as provider
 
+import scipy
 
 import torch
-from torch_geometric.data import InMemoryDataset, Data, DataLoader
-from torch_geometric.transforms import RadiusGraph, KNNGraph
-
+from torch_geometric.data import InMemoryDataset, Data, DataLoader, Batch
+from torch_geometric.transforms import BaseTransform, RadiusGraph, KNNGraph#, Delaunay
 
 # Download dataset for point cloud classification
 DATA_DIR = os.path.join(ROOT_DIR, '/root/workspace/data')
@@ -58,6 +57,35 @@ def load_h5(h5_filename):
 def loadDataFile(filename):
     return load_h5(filename)
 
+
+class Delaunay(BaseTransform):
+    r"""Computes the delaunay triangulation of a set of points
+    (functional name: :obj:`delaunay`).
+    """
+    def forward(self, data: Data) -> Data:
+        assert data.pos is not None
+
+        if data.pos.size(0) < 2:
+            data.edge_index = torch.tensor([], dtype=torch.long,
+                                           device=data.pos.device).view(2, 0)
+        if data.pos.size(0) == 2:
+            data.edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long,
+                                           device=data.pos.device)
+        elif data.pos.size(0) == 3:
+            data.face = torch.tensor([[0], [1], [2]], dtype=torch.long,
+                                     device=data.pos.device)
+        if data.pos.size(0) > 3:
+            pos = data.pos.cpu().numpy()
+            tri = scipy.spatial.Delaunay(pos, qhull_options='QJ')
+            vor = scipy.spatial.Voronoi(pos, qhull_options='QJ')
+            face = torch.from_numpy(tri.simplices)
+            edge = torch.from_numpy(vor.ridge_points)
+
+            data.face = face.t().contiguous().to(data.pos.device, torch.long)
+            data.edge_index = edge.t().contiguous().to(data.pos.device, torch.long)
+            #data.edge_index = torch.tensor(edge_list, dtype=torch.long, device=data.pos.device).t().contiguous()
+
+        return data
 
 class ModelNetH5Dataset(object):
     def __init__(self, list_filename, batch_size = 32, npoints = 1024, shuffle=True):
@@ -127,13 +155,21 @@ class ModelNetH5Dataset(object):
 
 
 class ModelNetH5Geometric(InMemoryDataset):
-    def __init__(self, root, connectivity, radius=.1, k=6, transform=None, pre_transform=None, pre_filter=None):
-        assert connectivity in ['knn', 'radius', 'convhull']
+    def __init__(self, root, connectivity, split='train', radius=.1, k=6, transform=None, pre_transform=None, pre_filter=None, force_reload=False):
+        assert connectivity in ['voronoi', 'knn', 'radius', 'unitsphere']
         self.connectivity = connectivity
-        self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius)}
+        #self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius), 'voronoi': Delaunay(), 'unitsphere': self.frame.get_frame}
+        self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius), 'voronoi': Delaunay(), 'unitsphere': Delaunay()}
 
-        super(ModelNetH5Geometric, self).__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        super(ModelNetH5Geometric, self).__init__(root, transform, pre_transform, pre_filter, force_reload=force_reload)
+        self.split = split
+        if split == 'train':
+            self.load(self.processed_paths[0])
+        elif split == 'test':
+            self.load(self.processed_paths[1])
+        else:
+            raise ValueError('Split not recognized')
+        print(self.data)
 
 
     @property
@@ -144,54 +180,77 @@ class ModelNetH5Geometric(InMemoryDataset):
     def processed_file_names(self):
         return [f'modelnet40_train_data_{self.connectivity}.pt', f'modelnet40_test_data_{self.connectivity}.pt']
 
-
     def process(self):
         self.train_loader = ModelNetH5Dataset('/root/workspace/data/modelnet40_ply_hdf5_2048/train_files.txt')
         self.test_loader = ModelNetH5Dataset('/root/workspace/data/modelnet40_ply_hdf5_2048/test_files.txt')
 
-        train_data = []
+        # train data
+        data_list = []
         start = time.time()
         while self.train_loader.has_next_batch():
             bdata, blabel = self.train_loader.next_batch()
             for i in range(bdata.shape[0]):
-                data = Data(pos=torch.from_numpy(bdata[i, :, 0:3]).to(torch.float32), y=torch.tensor(blabel[i], dtype=torch.long), x=torch.ones(bdata[i, :, 0:3].shape[0], 1))
+                data = Data(pos=torch.from_numpy(bdata[i, :, 0:3]).to(torch.float32), y=torch.tensor(blabel[i], dtype=torch.long), z=torch.ones(bdata[i, :, 0:3].shape[0], 1), dtype=torch.long)
                 data = self.conn_dict[self.connectivity](data)
-                train_data.append(data)
-        test_data = []
+                data_list.append(data)
+        self.save(data_list, self.processed_paths[0])
+
+        # test data
+        data_list = []
         while self.test_loader.has_next_batch():
             bdata, blabel = self.test_loader.next_batch()
             for i in range(bdata.shape[0]):
-                data = Data(pos=torch.from_numpy(bdata[i, :, 0:3]).to(torch.float32), y=torch.tensor(blabel[i], dtype=torch.long), x=torch.ones(bdata[i, :, 0:3].shape[0], 1))
+                data = Data(pos=torch.from_numpy(bdata[i, :, 0:3]).to(torch.float32), y=torch.tensor(blabel[i], dtype=torch.long), z=torch.ones(bdata[i, :, 0:3].shape[0], 1), dtype=torch.long)
                 data = self.conn_dict[self.connectivity](data)
-                test_data.append(data)
+                data_list.append(data)
+
+        self.save(data_list, self.processed_paths[1])
 
         print(f'Processing time: {time.time()-start}')
-        #data, slices = self.collate(train_data_list)
-        #torch.save((data, slices), self.processed_paths[0])
-        #data, slices = self.collate(test_data_list)
-        #torch.save((data, slices), self.processed_paths[1])
-
+        pass
 
 def modelnet40_dataloaders(
     connectivity : str = 'radius',
     radius : Optional[float] = None,
     k : Optional[int] = None,
+    force_reload : bool = False,
     batch_size : int = 128,
 ):
 
-    assert(connectivity in ['knn', 'radius']), f'Connectivity not recognized: {connectivity}'
+    assert(connectivity in ['knn', 'radius', 'voronoi', 'unitsphere']), f'Connectivity not recognized: {connectivity}'
     assert((connectivity!='radius') or (radius is not None)),f'Radial connectivity and radius do not match {connectivity,radius}'
     assert((connectivity!='knn') or (k is not None)),f'KNN connectivity and k do not match {connectivity,k}'
 
-    dataset = ModelNetH5Geometric('/root/workspace/data/modelnet40_ply_hdf5_2048', connectivity, radius, k)
+    train_dataset = ModelNetH5Geometric(root='/root/workspace/data/modelnet40_ply_hdf5_2048',
+                                        split='train',
+                                        connectivity=connectivity,
+                                        radius=radius,
+                                        k=k,
+                                        force_reload=force_reload
+    )
+    test_dataset = ModelNetH5Geometric(root='/root/workspace/data/modelnet40_ply_hdf5_2048',
+                                        split='test',
+                                        connectivity=connectivity,
+                                        radius=radius,
+                                        k=k,
+                                        force_reload=False,
+    )
 
-    train_datalist, test_datalist = dataset.train_data, dataset.test_data
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    train_loader = DataLoader(train_datalist, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_datalist, batch_size=batch_size, shuffle=False)
+    return train_loader, test_loader
 
-    return dataset, train_datalist, test_datalist, train_loader, test_loader
 
+def average_density(datalist):
+    edge_count, node_count = [], []
+    for data in datalist:
+        edge_index = data.edge_index
+        edge_count.append(edge_index.shape[1])
+        node_count.append(data.num_nodes)
+    average_nodes = np.mean(node_count)
+    average_edges = np.mean(edge_count)
+    return average_edges, average_nodes, edge_count, node_count
 
 if __name__=='__main__':
     #d = ModelNetH5Dataset('/root/workspace/data/modelnet40_ply_hdf5_2048/train_files.txt')
@@ -200,5 +259,19 @@ if __name__=='__main__':
     #ps_batch, cls_batch = d.next_batch(True)
     #print(ps_batch.shape)
     #print(cls_batch.shape)
-    
-    d = ModelNetH5Geometric('/root/workspace/data/modelnet40_ply_hdf5_2048', 'radius')
+    second_loop = {
+            'radius': [{'radius':0.1}, {'radius':0.25}, {'radius':0.5}],
+            #'radius': [{'radius':0.1}],
+            'knn': [{'k':4}, {'k':16}, {'k':32}],
+            'voronoi': [{}],
+            'unitsphere': [{}]}
+
+    for connectivity in ['radius', 'knn', 'voronoi', 'unitsphere']:
+    #for connectivity in ['radius', 'voronoi']:
+        for second in second_loop[connectivity]:
+            print('*'*10)
+            print(f'Connectivity: {connectivity} ({second})')
+            dataset, train_datalist, test_datalist, train_loader, test_loader = modelnet40_dataloaders(connectivity=connectivity, batch_size=32, force_reload=True, **second)
+            train_average_edges, train_average_nodes, edge_count, node_count = average_density(train_datalist)
+            test_average_edges, test_average_nodes, edge_count, node_count = average_density(test_datalist)
+            print('Average density:', f'train ({train_average_edges, train_average_nodes})', f'test ({test_average_edges, test_average_nodes})')
