@@ -75,6 +75,8 @@ class Frame(BaseTransform):
        if not hasattr(data, 'edge_index') or data.edge_index is None:
            data.edge_index = torch.tensor(edge_index_hull, dtype=torch.long).contiguous()
        data.radial_arr = torch.tensor(radial_arr, dtype=torch.float)
+       data.posc = data.pos
+       data.posr = data.pos
        return data
 
     def align(self, data, shell_data, cat_data, pth):      

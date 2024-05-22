@@ -31,9 +31,9 @@ import sys
 sys.path.append('./dataset/')
 from modelnetH5 import modelnet40_dataloaders
 sys.path.append('./models/')
-from comenet import ComENetCHA
+from comenet import ComENet
 from schnet import SchNet
-from 
+from leftnetCHA import LEFTNetCHA
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------
 # Model
@@ -54,7 +54,8 @@ class Model(Module):
     ) -> None:
 
         super(Model, self).__init__()
-        self.nn = ComENet(iscovhull=False, out_channels=40)
+        #self.nn = ComENet(iscovhull=False, out_channels=40)
+        self.nn = LEFTNetCHA(out_channels=40, cutoff=0.05, num_layers=1, hidden_channels=128)
 
 
     def forward(self, batch_data):
