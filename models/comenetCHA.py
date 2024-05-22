@@ -2,8 +2,8 @@ from torch_cluster import radius_graph
 from torch_geometric.nn import GraphConv, GraphNorm
 from torch_geometric.nn import inits
 
-from comenet_features import angle_emb, torsion_emb
-
+from SCHull_features import angle_emb, torsion_emb
+from SCHull_features import angle_emb_hull, torsion_emb_hull
 from torch_scatter import scatter, scatter_min
 
 from torch.nn import Embedding
@@ -12,7 +12,7 @@ import torch
 from torch import nn
 from torch import Tensor
 import torch.nn.functional as F
-
+from leftnetCHA import get_angle_torsion
 import math
 from math import sqrt
 
@@ -145,7 +145,8 @@ class SimpleInteractionBlockCHA(torch.nn.Module):
             cha_rate,
             cha_scale,
             act=swish,
-            act_hull = swish
+            act_hull = swish,
+            isangle_emb_hull=False,
     ):
         super(SimpleInteractionBlockCHA, self).__init__()
         self.act = act
@@ -158,12 +159,14 @@ class SimpleInteractionBlockCHA(torch.nn.Module):
         self.lin2 = Linear(hidden_channels, int(cha_scale*hidden_channels*cha_rate))
         self.lin_hull = Linear(hidden_channels, 2*int(cha_scale*hidden_channels)-2*int(cha_scale*hidden_channels*cha_rate))
         self.lin_cat = Linear(2*int(cha_scale*hidden_channels), hidden_channels)
-
+        self.isangle_emb_hull = isangle_emb_hull
         self.norm = GraphNorm(hidden_channels)
 
         # Transformations of Bessel and spherical basis representations.
-
-        self.lin_feature_hull = TwoLayerLinear(5, middle_channels, hidden_channels)
+        if self.isangle_emb_hull:
+            self.lin_feature_hull = TwoLayerLinear(16, middle_channels, hidden_channels)
+        else:
+            self.lin_feature_hull = TwoLayerLinear(7, middle_channels, hidden_channels)
         self.lin_feature1 = TwoLayerLinear(num_radial * num_spherical ** 2, middle_channels, hidden_channels)
         self.lin_feature2 = TwoLayerLinear(num_radial * num_spherical, middle_channels, hidden_channels)
 
@@ -300,6 +303,7 @@ class ComENetCHA(nn.Module):
             hull_cos = True,
             num_spherical=3,
             num_output_layers=3,
+            isangle_emb_hull=False,
     ):
         super(ComENetCHA, self).__init__()
         self.out_channels = out_channels
@@ -314,10 +318,13 @@ class ComENetCHA(nn.Module):
 
         act = swish
         self.act = act
-
+        self.isangle_emb_hull = isangle_emb_hull
         self.feature1 = torsion_emb(num_radial=num_radial, num_spherical=num_spherical, cutoff=cutoff)
         self.feature2 = angle_emb(num_radial=num_radial, num_spherical=num_spherical, cutoff=cutoff)
-
+        self.feature_emb_hull = torsion_emb_hull(num_radial=1, 
+                                                 num_spherical=2)
+        self.angle_emb_hull = angle_emb_hull(num_radial=1, 
+                                            num_spherical=2)
         self.emb = EmbeddingBlock(hidden_channels, act)
 
         self.interaction_blocks = torch.nn.ModuleList(
@@ -333,6 +340,7 @@ class ComENetCHA(nn.Module):
                     cha_scale,
                     act,
                     act,
+                    isangle_emb_hull
                 )
                 for _ in range(num_layers)
             ]
@@ -456,11 +464,38 @@ class ComENetCHA(nn.Module):
 
         # convex hull feature embedding
         edge_index_hull, edge_attr_hull, r = data.edge_index_hull, data.edge_attr_hull, data.posr
-        feature_hull_1, feature_hull_2 = self.embhull(r, edge_attr_hull, edge_index_hull)
+        # fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        dist_hull = edge_attr_hull[:, 0]
+        vecs_hull = edge_attr_hull[:, 1:]
+        i_hull, j_hull = edge_index_hull
+        theta_hull, phi_hull, tau_hull = get_angle_torsion(edge_index = edge_index_hull,
+                                                            vecs = vecs_hull, 
+                                                            dist = dist_hull,
+                                                            num_nodes = z.size(0))
+        
+        if self.isangle_emb_hull:
+            fea1_hull = torch.cat([self.feature_emb_hull(dist_hull, theta_hull, phi_hull), 
+                                   self.angle_emb_hull(dist_hull, tau_hull[0]),
+                                   self.angle_emb_hull(dist_hull, tau_hull[1])], dim=1)
+            
+            fea2_hull = torch.cat([self.feature_emb_hull(r[i_hull].unsqueeze(1), theta_hull, phi_hull), 
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[0]),
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[1]),]
+                                   , dim=1)
+        else:
+            fea1_hull = torch.cat([dist_hull.unsqueeze(1),
+                                   theta_hull.unsqueeze(1),
+                                   phi_hull.unsqueeze(1),
+                                   tau_hull[0].unsqueeze(1),
+                                   tau_hull[1].unsqueeze(1)], dim=1)
+            fea2_hull = torch.cat([r[i_hull].unsqueeze(1), 
+                                   r[j_hull].unsqueeze(1)], dim=1)  
+
+
         for interaction_block in self.interaction_blocks:
             x = interaction_block(x, 
                                 feature1, feature2, edge_index, 
-                                feature_hull_1, feature_hull_2, edge_index_hull,
+                                fea1_hull, fea2_hull, edge_index_hull,
                                 batch)
         # Interaction blocks.
     

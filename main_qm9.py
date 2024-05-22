@@ -156,6 +156,11 @@ def train(model, optimizer, scheduler, scheduler_name, train_loader, loss_func, 
         else:
             target = batch_data[cfg.trgt].unsqueeze(1)
         loss, _ = func_std_mae(out, target, loss_func, istest=False)
+
+        if torch.isnan(loss):
+            print(loss)
+            exit()
+
         loss.backward()
         optimizer.step()
         if scheduler_name == 'onecyclelr':
@@ -188,6 +193,11 @@ def val(model, data_loader, loss_func, device, disable_tqdm, cfg):
         else:
             target = batch_data[cfg.trgt].unsqueeze(1)
         loss, mae_arr = func_std_mae(out, target, loss_func, istest=True)
+
+        if torch.isnan(loss):
+            print(loss)
+            exit()
+
         if step == 0:
             mae_arr_accu = mae_arr.cpu()
         else:
@@ -202,8 +212,8 @@ parser = argparse.ArgumentParser(description='QM9')
 parser.add_argument('--device', type=int, default=0)
 parser.add_argument('--target', type=str, default='U0')
 
-parser.add_argument('--train_size', type=int, default=110000)
-parser.add_argument('--valid_size', type=int, default=10000)
+parser.add_argument('--train_size', type=int, default=80000)
+parser.add_argument('--valid_size', type=int, default=25000)
 parser.add_argument('--seed', type=int, default=42)
 
 parser.add_argument('--cutoff', type=float, default=5.0)
@@ -214,11 +224,11 @@ parser.add_argument('--num_radial', type=int, default=32)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--vt_batch_size', type=int, default=64)
 
-parser.add_argument('--epochs', type=int, default=1000)
-parser.add_argument('--lr', type=float, default=5e-4)
-parser.add_argument('--lr_decay_factor', type=float, default=0.6)
-parser.add_argument('--lr_decay_step_size', type=int, default=80)
-parser.add_argument('--weight_decay', type=float, default=2e-6)
+parser.add_argument('--epochs', type=int, default=600)
+parser.add_argument('--lr', type=float, default=7.5e-4)
+parser.add_argument('--lr_decay_factor', type=float, default=0.5)
+parser.add_argument('--lr_decay_step_size', type=int, default=60)
+parser.add_argument('--weight_decay', type=float, default=5e-7)
 
 parser.add_argument('--save_dir', type=str, default='')
 parser.add_argument('--disable_tqdm', default=False, action='store_true')
@@ -227,21 +237,26 @@ parser.add_argument('--norm_label', default=False, action='store_true')
 
 parser.add_argument('--num_layers', type=int, default=4)
 parser.add_argument('--hull_cos', default=False, action='store_true')
-parser.add_argument('--cha_rate', type=float, default=8/9)
+parser.add_argument('--isangle_emb_hull', default=False, action='store_true')
+parser.add_argument('--cha_rate', type=float, default=4/8)
 parser.add_argument('--cha_scale', type=float, default=1)
 
-parser.add_argument('--hidden_channels', type=int, default=128)
+parser.add_argument('--hidden_channels', type=int, default=110)
 parser.add_argument('--out_channels', type=int, default=1)
 
-parser.add_argument('--trgt', type=str, default='mu', help = ['ALL', 'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve','U0', 'U', 'H', 'G', 'Cv'])
-parser.add_argument('--model_name', default='dimenetppCHA', help=['schnet', 'schnetCHA',
+parser.add_argument('--trgt', type=str, default='ALL', help = ['ALL', 
+                                                               'mu', 'alpha', 
+                                                               'homo', 'lumo', 
+                                                               'gap', 'r2', 
+                                                               'zpve','U0', 
+                                                               'U', 'H', 
+                                                               'G', 'Cv'])
+parser.add_argument('--model_name', default='schnetCHA', help=['schnet', 'schnetCHA',
                                                                   'comenet', 'comenetCHA', 
-                                                                  'comenetCHA_new',
                                                                   'LeftNet', 'leftnetCHA',
                                                                   'sphereNet', 'sphereNetCHA',
                                                                   'dimenetpp', 'dimenetppCHA'])
 parser.add_argument('--exp_id', default=1)
-
 args = parser.parse_args()
 
 print(args)
@@ -249,13 +264,15 @@ print(args.save_dir)
 if args.trgt == 'ALL':
     args.out_channels = 12
 if args.model_name in ['comenetCHA_new', 'schnetCHA', 'leftnetCHA', 'sphereNetCHA', 'dimenetppCHA']:
-    name_ = '{}_lyr{}_hullCOS{}_cha{:.2}_{}'.format(args.model_name, args.num_layers, args.hull_cos, args.cha_rate,  args.cha_scale)
+    name_ = '{}_lyr{}_isangle_emb_hull{}_cha{:.2}_{}'.format(args.model_name, args.num_layers, 
+                                                             args.isangle_emb_hull, args.cha_rate,  
+                                                             args.cha_scale)
 else:
     name_ = '{}_lyr{}'.format(args.model_name, args.num_layers)
 
 kwargs = {
         'entity': 'utah-math-data-science', 
-        'project': 'Unit_Sphere_ComeNet_QM9_V4',
+        'project': 'Unit_Sphere_QM9_V1(ComeNet_Fea)',
         'mode': 'disabled',
         'name': name_,
         'config': args,
@@ -265,7 +282,6 @@ wandb.init(**kwargs)
 wandb.save('*.txt')
 
 dataset = QM93D(root='/root/workspace/A_data/qm93d/dataset')
-
 target = args.target
 dataset.data.y = dataset.data[target]
 split_idx = dataset.get_idx_split(len(dataset.data.y), train_size=args.train_size, valid_size=args.valid_size, seed=args.seed)
@@ -303,22 +319,16 @@ elif args.model_name == 'comenet':
                     hidden_channels=args.hidden_channels,
                     out_channels=args.out_channels,
                     iscovhull=False)
-
-elif args.model_name == 'comenetCHA':
-    model = ComENet(cutoff=args.cutoff, 
-                    num_layers=args.num_layers,
-                    hidden_channels=args.hidden_channels,
-                    out_channels=args.out_channels,
-                    iscovhull=True)
     
-elif args.model_name == 'comenetCHA_new':
+elif args.model_name == 'comenetCHA':
     model = ComENetCHA(cutoff=args.cutoff, 
                     num_layers=args.num_layers,
                     hidden_channels=args.hidden_channels,
                     out_channels=args.out_channels,
                     cha_rate = args.cha_rate,
                     cha_scale = args.cha_scale,
-                    hull_cos = args.hull_cos
+                    hull_cos = args.hull_cos,
+                    isangle_emb_hull = args.isangle_emb_hull
                     )
     
 elif args.model_name == 'LeftNet':
@@ -337,7 +347,11 @@ elif args.model_name == 'leftnetCHA':
                        hidden_channels=args.hidden_channels, 
                        out_channels=args.out_channels,
                        num_radial=args.num_radial, 
-                       y_mean=y_mean, y_std=y_std)
+                       y_mean=y_mean, y_std=y_std,
+                       cha_rate = args.cha_rate,
+                       cha_scale = args.cha_scale,
+                       hull_cos=False,
+                       isangle_emb_hull = args.isangle_emb_hull)
 
 elif args.model_name == 'sphereNet':
     model = SphereNet(energy_and_force=False, 
@@ -355,7 +369,8 @@ elif args.model_name == 'sphereNetCHA':
                       out_channels=args.out_channels,
                       cha_rate = args.cha_rate,
                       cha_scale = args.cha_scale,
-                      hull_cos = args.hull_cos
+                      hull_cos = args.hull_cos,
+                      isangle_emb_hull = args.isangle_emb_hull
                       )
 
 elif args.model_name == 'dimenetpp':
@@ -375,7 +390,8 @@ elif args.model_name == 'dimenetppCHA':
                       out_channels=args.out_channels,
                       cha_rate = args.cha_rate,
                       cha_scale = args.cha_scale,
-                      hull_cos = args.hull_cos
+                      hull_cos = args.hull_cos,
+                      isangle_emb_hull = args.isangle_emb_hull
                       )
 
 loss_func = torch.nn.L1Loss()

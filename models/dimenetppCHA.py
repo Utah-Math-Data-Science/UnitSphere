@@ -7,6 +7,8 @@ from torch_scatter import scatter
 from math import sqrt
 from torch_sparse import SparseTensor
 from dimenetpp_features import dist_emb, angle_emb
+from SCHull_features import angle_emb_hull, torsion_emb_hull
+from leftnetCHA import get_angle_torsion
 
 try:
     import sympy as sym
@@ -235,11 +237,12 @@ class update_v(torch.nn.Module):
                  num_output_layers, act, output_init,
                  cha_rate,
                  cha_scale, 
+                 isangle_emb_hull,
                  num_filters=128):
         super(update_v, self).__init__()
         self.act = act
         self.output_init = output_init
-
+        self.isangle_emb_hull = isangle_emb_hull
         self.lin_up = nn.Linear(hidden_channels, out_emb_channels, bias=True)
         self.lins = torch.nn.ModuleList()
         for _ in range(num_output_layers):
@@ -247,10 +250,16 @@ class update_v(torch.nn.Module):
         self.lin = nn.Linear(out_emb_channels, out_channels, bias=False)
 
         self.lin_hull = Linear(hidden_channels, num_filters, bias=False)
-        self.mlp_hull = torch.nn.Sequential(
-            Linear(5, num_filters),
-            Linear(num_filters, num_filters),
-        )
+        if isangle_emb_hull:
+            self.mlp_hull = torch.nn.Sequential(
+                Linear(16, num_filters),
+                Linear(num_filters, num_filters),
+            )
+        else:
+            self.mlp_hull = torch.nn.Sequential(
+                Linear(7, num_filters),
+                Linear(num_filters, num_filters),
+            )
         self.lin1_hull = Linear(num_filters, hidden_channels)
         self.lin2_hull = Linear(hidden_channels, int(cha_scale*out_emb_channels*(1-cha_rate)))
 
@@ -349,23 +358,28 @@ class DimeNetPPCHA(torch.nn.Module):
         hull_cos = True,
         envelope_exponent=5, 
         num_before_skip=1, num_after_skip=2, num_output_layers=3, 
-        act=swish, output_init='GlorotOrthogonal'):
+        act=swish, 
+        isangle_emb_hull=False,
+        output_init='GlorotOrthogonal'):
         super(DimeNetPPCHA, self).__init__()
 
         self.cutoff = cutoff
         self.energy_and_force = energy_and_force
-
+        self.isangle_emb_hull = isangle_emb_hull
         self.init_e = init(num_radial, hidden_channels, act)
         self.init_v = update_v(hidden_channels, out_emb_channels, 
                                out_channels, num_output_layers, act, output_init,
-                               cha_rate, cha_scale)
+                               cha_rate, cha_scale, isangle_emb_hull)
         self.init_u = update_u()
         self.emb = emb(num_spherical, num_radial, self.cutoff, envelope_exponent)
-        
+        self.feature_emb_hull = torsion_emb_hull(num_radial=1, 
+                                                 num_spherical=2)
+        self.angle_emb_hull = angle_emb_hull(num_radial=1, 
+                                                num_spherical=2)
         self.update_vs = torch.nn.ModuleList([
             update_v(hidden_channels, out_emb_channels, 
                      out_channels, num_output_layers, act, output_init,
-                     cha_rate, cha_scale) for _ in range(num_layers)])
+                     cha_rate, cha_scale, isangle_emb_hull) for _ in range(num_layers)])
 
         self.update_es = torch.nn.ModuleList([
             update_e(
@@ -400,10 +414,37 @@ class DimeNetPPCHA(torch.nn.Module):
         dist, angle, i, j, idx_kj, idx_ji = xyz_to_dat(pos, edge_index, num_nodes, use_torsion=False)
 
         emb = self.emb(dist, angle, idx_kj)
+        
         # convex hull feature embedding
         edge_index_hull, edge_attr_hull, r = batch_data.edge_index_hull, batch_data.edge_attr_hull, batch_data.posr
-        fea_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        # fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        dist_hull = edge_attr_hull[:, 0]
+        vecs_hull = edge_attr_hull[:, 1:]
+        i_hull, j_hull = edge_index_hull
+        theta_hull, phi_hull, tau_hull = get_angle_torsion(edge_index = edge_index_hull,
+                                                            vecs = vecs_hull, 
+                                                            dist = dist_hull,
+                                                            num_nodes = z.size(0))
 
+        if self.isangle_emb_hull:
+            fea1_hull = torch.cat([self.feature_emb_hull(dist_hull, theta_hull, phi_hull), 
+                                   self.angle_emb_hull(dist_hull, tau_hull[0]),
+                                   self.angle_emb_hull(dist_hull, tau_hull[1])], dim=1)
+            
+            fea2_hull = torch.cat([self.feature_emb_hull(r[i_hull].unsqueeze(1), theta_hull, phi_hull), 
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[0]),
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[1]),]
+                                   , dim=1)
+        else:
+            fea1_hull = torch.cat([dist_hull.unsqueeze(1),
+                                   theta_hull.unsqueeze(1),
+                                   phi_hull.unsqueeze(1),
+                                   tau_hull[0].unsqueeze(1),
+                                   tau_hull[1].unsqueeze(1)], dim=1)
+            fea2_hull = torch.cat([r[i_hull].unsqueeze(1), 
+                                   r[j_hull].unsqueeze(1)], dim=1)  
+
+        fea_hull = torch.cat([fea1_hull, fea2_hull], dim=1)
         #Initialize edge, node, graph features
         e = self.init_e(z, emb, i, j)
         v = self.init_v(e, i, fea_hull, edge_index_hull)
