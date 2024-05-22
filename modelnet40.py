@@ -56,7 +56,7 @@ class Model(Module):
 
         super(Model, self).__init__()
         #self.nn = ComENet(iscovhull=False, out_channels=40)
-        self.nn = ComENetCHA(out_channels=40)
+        self.nn = ComENetCHA(out_channels=40, middle_channels=64, hidden_channels=128, num_layers=2)
         #self.nn = LEFTNetCHA(out_channels=40, cutoff=0.05, num_layers=1, hidden_channels=128)
 
 
