@@ -570,7 +570,7 @@ class LEFTNetCHA(torch.nn.Module):
         self.neighbor_emb = NeighborEmb(hidden_channels)
         self.feature_emb_hull = torsion_emb(num_radial=2, 
                                                  num_spherical=2)
-        self.angle_emb_hull = angle_emb_hull(num_radial=1, 
+        self.angle_emb_hull = angle_emb(num_radial=1, 
                                                 num_spherical=2)
         self.S_vector = S_vector(hidden_channels)
         self.isangle_emb_hull = isangle_emb_hull
