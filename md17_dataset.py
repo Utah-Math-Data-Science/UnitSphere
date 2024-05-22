@@ -3,7 +3,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 from sklearn.utils import shuffle
-
+from mol_unit_sphere import Frame
 from torch_geometric.data import InMemoryDataset, download_url
 from torch_geometric.data import Data, DataLoader
 
@@ -83,14 +83,29 @@ class MD17(InMemoryDataset):
         z = data['z']
 
         data_list = []
+        frame = Frame()
         for i in tqdm(range(len(E))):
             R_i = torch.tensor(R[i],dtype=torch.float32)
             z_i = torch.tensor(z,dtype=torch.int64)
+
+            R_i, z_i, edge_index_hull, edge_attr_hull, radial_arr = frame.get_frame(R_i.numpy(), 
+                                                                                    z_i.numpy(),
+                                                                                    )
+            R_i = torch.tensor(R_i, dtype=torch.float32)
+            z_i = torch.tensor(z_i, dtype=torch.int64)
+            edge_index_hull = torch.tensor(edge_index_hull, dtype=torch.int64)
+            edge_attr_hull = torch.tensor(edge_attr_hull, dtype=torch.float32)
+            radial_arr = torch.tensor(radial_arr, dtype=torch.float32)
+
             E_i = torch.tensor(E[i],dtype=torch.float32)
             F_i = torch.tensor(F[i],dtype=torch.float32)
             center_i = R_i.mean(dim=0)
             posc_i = R_i - center_i
-            data = Data(pos=R_i,posc=posc_i, z=z_i, y=E_i, force=F_i)
+            data = Data(pos=R_i, posc=R_i, z=z_i, y=E_i, force=F_i,
+                        edge_index_hull=edge_index_hull, 
+                        edge_attr_hull=edge_attr_hull,
+                        posr=radial_arr
+                        )
 
             data_list.append(data)
 
