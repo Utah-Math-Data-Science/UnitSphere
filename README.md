@@ -1,0 +1,31 @@
+# SCHull Respository
+
+This is the official repository for the SCHull algorith. 
+
+
+## Installation
+
+To install the requirements for the SCHull algorithm, you can use the following command:
+
+```bash
+pip install -r requirements.txt
+```
+
+
+## Usage
+
+All datasets are downloaded and processed at runtime. They are stored in a `/root/workspace/data/` directory.
+
+**Synthetic Experiments**
+
+The synthetic experiments $n$-chains and NestedSquares can be found in the `/docs/` directory. These jupyter notebooks contain the code to generate the results in the paper.
+
+
+**Benchmark Experiments**
+
+The benchmark experiments can be run using either of the two following commands:
+
+```bash
+python main_qm9.py
+python main_md17.py
+```
