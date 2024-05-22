@@ -31,8 +31,9 @@ import sys
 sys.path.append('./dataset/')
 from modelnetH5 import modelnet40_dataloaders
 sys.path.append('./models/')
-from comenet import ComENet
+from comenet import ComENetCHA
 from schnet import SchNet
+from 
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------
 # Model

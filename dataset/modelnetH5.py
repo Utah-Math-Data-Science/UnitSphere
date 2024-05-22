@@ -21,6 +21,8 @@ import torch
 from torch_geometric.data import InMemoryDataset, Data, DataLoader, Batch
 from torch_geometric.transforms import BaseTransform, RadiusGraph, KNNGraph#, Delaunay
 
+from frame_transform import Frame
+
 # Download dataset for point cloud classification
 DATA_DIR = os.path.join(ROOT_DIR, '/root/workspace/data')
 if not os.path.exists(DATA_DIR):
@@ -159,7 +161,7 @@ class ModelNetH5Geometric(InMemoryDataset):
         assert connectivity in ['voronoi', 'knn', 'radius', 'unitsphere']
         self.connectivity = connectivity
         #self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius), 'voronoi': Delaunay(), 'unitsphere': self.frame.get_frame}
-        self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius), 'voronoi': Delaunay(), 'unitsphere': Delaunay()}
+        self.conn_dict = {'knn': KNNGraph(k), 'radius': RadiusGraph(r=radius), 'voronoi': Delaunay(), 'unitsphere': Frame(tol=1e-2)}
 
         super(ModelNetH5Geometric, self).__init__(root, transform, pre_transform, pre_filter, force_reload=force_reload)
         self.split = split
@@ -169,7 +171,6 @@ class ModelNetH5Geometric(InMemoryDataset):
             self.load(self.processed_paths[1])
         else:
             raise ValueError('Split not recognized')
-        print(self.data)
 
 
     @property
@@ -266,12 +267,12 @@ if __name__=='__main__':
             'voronoi': [{}],
             'unitsphere': [{}]}
 
-    for connectivity in ['radius', 'knn', 'voronoi', 'unitsphere']:
-    #for connectivity in ['radius', 'voronoi']:
+    #for connectivity in ['radius', 'knn', 'voronoi', 'unitsphere']:
+    for connectivity in ['unitsphere']:
         for second in second_loop[connectivity]:
             print('*'*10)
             print(f'Connectivity: {connectivity} ({second})')
-            dataset, train_datalist, test_datalist, train_loader, test_loader = modelnet40_dataloaders(connectivity=connectivity, batch_size=32, force_reload=True, **second)
-            train_average_edges, train_average_nodes, edge_count, node_count = average_density(train_datalist)
-            test_average_edges, test_average_nodes, edge_count, node_count = average_density(test_datalist)
+            train_loader, test_loader = modelnet40_dataloaders(connectivity=connectivity, batch_size=32, force_reload=True, **second)
+            train_average_edges, train_average_nodes, edge_count, node_count = average_density(train_loader)
+            test_average_edges, test_average_nodes, edge_count, node_count = average_density(test_loader)
             print('Average density:', f'train ({train_average_edges, train_average_nodes})', f'test ({test_average_edges, test_average_nodes})')

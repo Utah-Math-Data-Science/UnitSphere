@@ -10,7 +10,7 @@ setup:
   train: True
   wandb_dir: /root/workspace/out/modelnet40
 load:
-  connectivity: knn
+  connectivity: unitsphere
   radius: 0.1
   k: 4
   batch_size: 2 #1024-max 96-default
