@@ -4,12 +4,14 @@ import torch.nn.functional as F
 from torch.nn import Embedding, Sequential, Linear
 from torch_scatter import scatter
 from torch_geometric.nn import radius_graph
-
+from SCHull_features import angle_emb_hull, torsion_emb_hull
+from leftnetCHA import get_angle_torsion
 
 class update_e(torch.nn.Module):
-    def __init__(self, hidden_channels, num_filters, num_gaussians, cutoff):
+    def __init__(self, hidden_channels, num_filters, num_gaussians, cutoff, isangle_emb_hull):
         super(update_e, self).__init__()
         self.cutoff = cutoff
+        self.isangle_emb_hull = isangle_emb_hull
         self.lin = Linear(hidden_channels, num_filters, bias=False)
         self.mlp = Sequential(
             Linear(num_gaussians, num_filters),
@@ -17,11 +19,18 @@ class update_e(torch.nn.Module):
             Linear(num_filters, num_filters),
         )
         self.lin_hull = Linear(hidden_channels, num_filters, bias=False)
-        self.mlp_hull = Sequential(
-            Linear(5, num_filters),
-            ShiftedSoftplus(),
-            Linear(num_filters, num_filters),
-        )
+        if isangle_emb_hull:
+            self.mlp_hull = Sequential(
+                Linear(16, num_filters),
+                ShiftedSoftplus(),
+                Linear(num_filters, num_filters),
+            )
+        else:
+            self.mlp_hull = Sequential(
+                Linear(7, num_filters),
+                ShiftedSoftplus(),
+                Linear(num_filters, num_filters),
+            )
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -185,7 +194,8 @@ class SchNetCHA(torch.nn.Module):
                  num_gaussians=25,
                  cha_rate = 0.5,
                  cha_scale = 1,
-                 hull_cos = True):
+                 hull_cos = True,
+                 isangle_emb_hull=False,):
         super(SchNetCHA, self).__init__()
 
         self.energy_and_force = energy_and_force
@@ -195,14 +205,18 @@ class SchNetCHA(torch.nn.Module):
         self.out_channels = out_channels
         self.num_filters = num_filters
         self.num_gaussians = num_gaussians
-
+        self.isangle_emb_hull = isangle_emb_hull
+        self.feature_emb_hull = torsion_emb_hull(num_radial=1, 
+                                                 num_spherical=2)
+        self.angle_emb_hull = angle_emb_hull(num_radial=1, 
+                                                num_spherical=2)
         self.init_v = Embedding(100, hidden_channels)
         self.dist_emb = emb(0.0, cutoff, num_gaussians)
 
         self.update_vs = torch.nn.ModuleList([update_v(hidden_channels, num_filters, cha_rate, cha_scale) for _ in range(num_layers)])
 
         self.update_es = torch.nn.ModuleList([
-            update_e(hidden_channels, num_filters, num_gaussians, cutoff) for _ in range(num_layers)])
+            update_e(hidden_channels, num_filters, num_gaussians, cutoff, isangle_emb_hull) for _ in range(num_layers)])
         
         self.update_u = update_u(hidden_channels, out_channels)
 
@@ -231,7 +245,34 @@ class SchNetCHA(torch.nn.Module):
         v = self.init_v(z)
         # convex hull feature embedding
         edge_index_hull, edge_attr_hull, r = batch_data.edge_index_hull, batch_data.edge_attr_hull, batch_data.posr
-        fea_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        # fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
+        dist_hull = edge_attr_hull[:, 0]
+        vecs_hull = edge_attr_hull[:, 1:]
+        i_hull, j_hull = edge_index_hull
+        theta_hull, phi_hull, tau_hull = get_angle_torsion(edge_index = edge_index_hull,
+                                                            vecs = vecs_hull, 
+                                                            dist = dist_hull,
+                                                            num_nodes = z.size(0))
+
+        if self.isangle_emb_hull:
+            fea1_hull = torch.cat([self.feature_emb_hull(dist_hull, theta_hull, phi_hull), 
+                                   self.angle_emb_hull(dist_hull, tau_hull[0]),
+                                   self.angle_emb_hull(dist_hull, tau_hull[1])], dim=1)
+            
+            fea2_hull = torch.cat([self.feature_emb_hull(r[i_hull].unsqueeze(1), theta_hull, phi_hull), 
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[0]),
+                                   self.angle_emb_hull(r[j_hull].unsqueeze(1), tau_hull[1]),]
+                                   , dim=1)
+        else:
+            fea1_hull = torch.cat([dist_hull.unsqueeze(1),
+                                   theta_hull.unsqueeze(1),
+                                   phi_hull.unsqueeze(1),
+                                   tau_hull[0].unsqueeze(1),
+                                   tau_hull[1].unsqueeze(1)], dim=1)
+            fea2_hull = torch.cat([r[i_hull].unsqueeze(1), 
+                                   r[j_hull].unsqueeze(1)], dim=1)  
+
+        fea_hull = torch.cat([fea1_hull, fea2_hull], dim=1)
 
         for update_e, update_v in zip(self.update_es, self.update_vs):
             e, e_hull = update_e(v, 
