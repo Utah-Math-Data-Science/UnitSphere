@@ -1,8 +1,10 @@
 ### Based on the code in https://github.com/divelab/DIG/tree/dig-stable/dig/threedgraph
 
-from qm9_dataset import QM93D
+
 import sys
 sys.path.append('/root/workspace/UnitSphere/models')
+sys.path.append('/root/workspace/UnitSphere/dataset')
+from qm9_dataset import QM93D
 from leftnet import LEFTNet
 from schnet import SchNet
 from schnetCHA import SchNetCHA

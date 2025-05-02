@@ -9,13 +9,13 @@ from matplotlib import cm
 import matplotlib.pyplot as plt
 
 import sys
-sys.path.append('/root/workspace/UnitSphere/alignment/pyorbit/utils/')
+sys.path.append('/mntc/yuhaoh/programme/SCHull/alignment/pyorbit/utils/')
 from alignment3D import *
 from geometry import angle_between_vectors, planar_normal, project_onto_plane
 from hopcroft import PartitionRefinement
 from qhull import Qhull
 
-sys.path.append('/root/workspace/UnitSphere/alignment/pyorbit/vis/')
+sys.path.append('/mntc/yuhaoh/programme/SCHull/alignment/pyorbit/vis/')
 from visualizer import Visualizer, plot_axes, plot_mol, plot_shell, plot_3d_pointcloud, plot_3d_polyhedron, plot_point, plot_plane
 
 def build_adjacency_list(edges):
@@ -277,10 +277,13 @@ class Frame(metaclass=ABCMeta):
         else:
             raise TypeError(f"Data type not supported {type(data)}")
 
-    def project_sphere(self, data, cat_data, *args, **kwargs):
+    def project_sphere(self, data, cat_data=None, *args, **kwargs):
 
         distances = np.linalg.norm(data, axis=1, keepdims=False)
-        temp =  data/np.linalg.norm(data, axis=1, keepdims=True)
+        temp = data/np.linalg.norm(data, axis=1, keepdims=True)
+        # data = np.array([12, 20, 12, 14, 13], dtype=np.float32)
+        data_ch = data.copy()
+        # temp = data / 10
         arr, key = np.unique(temp, axis=0, return_inverse=True)
 
         # record which node projected
@@ -291,24 +294,29 @@ class Frame(metaclass=ABCMeta):
             proj_index_record[key[k]].append(k)
         ### modified by hyh ###
         
-            
-        encoding = {}
-        dists_hash = {}
-        for val in set(key):
-            dists = [(custom_round(d,self.tol), custom_round(c,self.tol))  for d,c in zip(distances[key==val],cat_data[key==val])]
-            dists = tuple(sorted(dists))
-            if dists not in dists_hash:
-                dists_hash[dists] = id(dists)
+        # encoding = {}
+        # dists_hash = {}
+        # for val in set(key):
+        #     dists = [(custom_round(d,self.tol), custom_round(c,self.tol))  for d,c in zip(distances[key==val], cat_data[key==val])]
+        #     dists = tuple(sorted(dists))
+        #     if dists not in dists_hash:
+        #         dists_hash[dists] = id(dists)
 
-            encoding[val] = dists_hash[dists]
+        #     encoding[val] = dists_hash[dists]
         
         proj_index_record_reverse = {}
         for key in proj_index_record:
             for i in range(len(proj_index_record[key])):
                 proj_index_record_reverse[proj_index_record[key][i]] = key
+        
+        # print(proj_index_record_reverse)
+        for k in range(len(data_ch)):
+            data_ch[k] = arr[proj_index_record_reverse[k]]
+            # print(proj_index_record_reverse[k])
 
-        return dists_hash, encoding, arr, proj_index_record, proj_index_record_reverse
-
+        # return dists_hash, encoding, 
+        return arr, data_ch, proj_index_record, proj_index_record_reverse
+    
     def get_recover_adj(self,
                         adj_list,
                         shell_data_proj_id_rcrd):
@@ -416,15 +424,18 @@ class Frame(metaclass=ABCMeta):
                 )
         return attr_arr
 
-    def get_frame(self, data, cat_data, data_edge_index=None, *args, **kwargs):
+    def get_frame(self, data, cat_data=None, data_edge_index=None, *args, **kwargs):
+        
 
         data = self.check_type(data) # Assert Type
         data = self.align_center(data) # Assert Centered
         indices = np.linalg.norm(data, axis=1) > self.tol
         original_data = data.copy()
-        original_cat = cat_data.copy()
         data = data[indices]
-        cat_data = cat_data[indices]
+        if cat_data is not None:
+            original_cat = cat_data.copy()
+            cat_data = cat_data[indices]
+        
 
         ### In order to debug, intentionally make two points proj into one 
         # data[1] = data[0].copy() * 2
@@ -432,17 +443,17 @@ class Frame(metaclass=ABCMeta):
         
         # PROJECT ONTO SPHERE
         ### modified by hyh ###
-        dist_hash, r_encoding, shell_data, shell_data_proj_id_rcrd,  shell_data_proj_id_rcrd_rvrs= self.project_sphere(data, 
-                                                                                                                        cat_data, 
-                                                                                                                        *args, 
-                                                                                                                        **kwargs)
+        shell_data, shell_data_ch, shell_data_proj_id_rcrd, shell_data_proj_id_rcrd_rvrs= self.project_sphere(data, 
+                                                                                               cat_data, 
+                                                                                               *args, 
+                                                                                               **kwargs)
 
 
-        
         # GET CONVEX HULL
         shell_rank = np.linalg.matrix_rank(shell_data, tol=self.tol)
         shell_n = shell_data.shape[0]
         shell_graph = self.chull.get_chull_graph(shell_data, shell_rank, shell_n)
+
 
 
         # bool_lst = [i in shell_graph for i in range(shell_n)]
@@ -466,22 +477,23 @@ class Frame(metaclass=ABCMeta):
         # GET GEOMETRIC ENCODING
         adj_list = build_adjacency_list(shell_graph)
 
-        s_feature = self.get_hull_geometric_info(shell_data, 
-                                                 adj_list, 
-                                                 shell_rank, 
-                                                 )
+        # s_feature = self.get_hull_geometric_info(shell_data, 
+        #                                          adj_list, 
+        #                                          shell_rank, 
+        #                                          )
         
         rcvr_adj_list = self.get_recover_adj(adj_list, shell_data_proj_id_rcrd)
 
         edge_index_hull = self.adj_arr(rcvr_adj_list)
 
-        edge_attr_hull = self.edge_attr_arr(s_feature,
-                                            shell_data_proj_id_rcrd_rvrs,
-                                            edge_index_hull)
-        radial_arr = self.get_radial_arr(data)
+        # edge_attr_hull = self.edge_attr_arr(s_feature,
+        #                                     shell_data_proj_id_rcrd_rvrs,
+        #                                     edge_index_hull)
+        # radial_arr = self.get_radial_arr(data)
     
-        return data, cat_data, edge_index_hull, edge_attr_hull, radial_arr
-
+        # return data, cat_data, edge_index_hull, edge_attr_hull, radial_arr
+        return data, shell_data_ch, edge_index_hull
+ 
 np.random.seed(1)
 
 plt.style.use('ggplot')

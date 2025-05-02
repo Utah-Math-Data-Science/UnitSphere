@@ -1,8 +1,11 @@
-from md17_dataset import MD17
+
 import sys
-sys.path.append('/root/workspace/UnitSphere/models')
+sys.path.append('/root/workspace/SCHull/models')
+sys.path.append('/root/workspace/SCHull/dataset')
+from md17_dataset import MD17
 from leftnet import LEFTNet
 from leftnetCHA import LEFTNetCHA
+from segnn import SEGNN
 import sys, os
 import argparse
 import os
@@ -84,6 +87,7 @@ def run(device, train_dataset, valid_dataset, test_dataset, model, loss_func, ev
         
         print({'Train': train_mae, 'Validation': valid_mae, 
                'Test': test_mae, 'Best valid': best_valid, 
+               'best_val_force_mae': best_val_force_mae, 'valid_test_force_mae': valid_test_force_mae,
                'Duration': t_end-t_start})
         
         wandb.log({
@@ -113,17 +117,18 @@ def train(model, optimizer, train_loader, energy_and_force, p, loss_func, device
     for step, batch_data in enumerate(tqdm(train_loader, disable=False)):
         optimizer.zero_grad()
         batch_data = batch_data.to(device)
-        out,forces = model(batch_data)
+        out, forces = model(batch_data)
         NUM_ATOM = batch_data.force.size()[0]
 
         out = out * FORCE_MEAN_TOTAL + ENERGY_MEAN_TOTAL * NUM_ATOM
         forces = forces * FORCE_MEAN_TOTAL
         if energy_and_force:
-            force = -grad(outputs=out, inputs=batch_data.posc, grad_outputs=torch.ones_like(out), create_graph=True,
-                                         retain_graph=True)[0] + forces/1000
+            # force = -grad(outputs=out, inputs=batch_data.posc, grad_outputs=torch.ones_like(out), create_graph=True,
+            #                              retain_graph=True)[0]*0 + forces/1000
+            force = forces/1000
             e_loss = loss_func(out, batch_data.y.unsqueeze(1))
             f_loss = loss_func(force, batch_data.force)
-            loss = e_loss + p * f_loss
+            loss = e_loss*0 + p * f_loss
         else:
             loss = loss_func(out, batch_data.y.unsqueeze(1))
         loss.backward()
@@ -151,8 +156,9 @@ def val(model, data_loader, energy_and_force, p, device, cfg):
         forces = forces * FORCE_MEAN_TOTAL
 
         if energy_and_force:
-            force = -grad(outputs=out, inputs=batch_data.posc, grad_outputs=torch.ones_like(out), create_graph=True,
-                        retain_graph=True)[0] + forces/1000
+            # force = -grad(outputs=out, inputs=batch_data.posc, grad_outputs=torch.ones_like(out), create_graph=True,
+            #             retain_graph=True)[0] + forces/1000
+            force = forces/1000
             if torch.sum(torch.isnan(force)) != 0:
                 mask = torch.isnan(force)
                 force = force[~mask].reshape((-1, 3))
@@ -182,18 +188,18 @@ parser.add_argument('--device', type=int, default=0)
 parser.add_argument('--eval_steps', type=int, default=10)
 parser.add_argument('--eval_start', type=int, default=500)
 parser.add_argument('--epochs', type=int, default=1200)
-parser.add_argument('--batch_size', type=int, default=4)
-parser.add_argument('--vt_batch_size', type=int, default=32)
+parser.add_argument('--batch_size', type=int, default=16)
+parser.add_argument('--vt_batch_size', type=int, default=16)
 
-parser.add_argument('--lr', type=float, default=0.0004)
+parser.add_argument('--lr', type=float, default=0.001)
 parser.add_argument('--lr_decay_factor', type=float, default=0.5)
-parser.add_argument('--lr_decay_step_size', type=int, default=180)
+parser.add_argument('--lr_decay_step_size', type=int, default=20)
 
-parser.add_argument('--p', type=int, default=100)
+parser.add_argument('--p', type=int, default=1)
 
-parser.add_argument('--cutoff', type=float, default=8)
+parser.add_argument('--cutoff', type=float, default=6)
 parser.add_argument('--num_layers', type=int, default=4)
-parser.add_argument('--hidden_channels', type=int, default=200)
+parser.add_argument('--hidden_channels', type=int, default=50)
 parser.add_argument('--num_radial', type=int, default=32)
 
 parser.add_argument('--hull_cos', default=False, action='store_true')
@@ -202,21 +208,21 @@ parser.add_argument('--cha_rate', type=float, default=7/8)
 parser.add_argument('--cha_scale', type=float, default=1)
 
 parser.add_argument('--save_dir', type=str, default='')
-parser.add_argument('--name', type=str, default='uracil') #aspirin, benzene2017, ethanol, malonaldehyde, naphthalene, salicylic, toluene, uracil
-parser.add_argument('--model_name', default='leftnetCHA', help=['LeftNet', 'leftnetCHA'])
+parser.add_argument('--name', type=str, default='ethanol') #aspirin, benzene2017, ethanol, malonaldehyde, naphthalene, salicylic, toluene, uracil
+parser.add_argument('--model_name', default='SEGNN', help=['LeftNet', 'leftnetCHA'])
 args = parser.parse_args()
 print(args)
 
 if args.model_name in ['comenetCHA_new', 'schnetCHA', 'leftnetCHA', 'sphereNetCHA', 'dimenetppCHA']:
-    name_ = '{}_lyr{}_isangle_emb_hull{}_cha{:.2}_{}'.format(args.model_name, args.num_layers, 
-                                                             args.isangle_emb_hull, args.cha_rate,  
-                                                             args.cha_scale)
+    name_ = '{}_{}_lyr{}_isangle_emb_hull{}_cha{:.2}_{}'.format(args.name, args.model_name, args.num_layers, 
+                                                                args.isangle_emb_hull, args.cha_rate,  
+                                                                args.cha_scale)
 else:
-    name_ = '{}_lyr{}'.format(args.model_name, args.num_layers)
+    name_ = '{}_{}_lyr{}'.format(args.name, args.model_name, args.num_layers)
 kwargs = {
         'entity': 'utah-math-data-science', 
-        'project': 'Unit_Sphere_MD17_V1',
-        'mode': 'online',
+        'project': 'Unit_Sphere_MD17_V2',
+        'mode': 'disabled',
         'name': name_,
         'config': args,
         'settings': wandb.Settings(_disable_stats=True), 'reinit': True
@@ -263,6 +269,14 @@ if args.model_name == 'LeftNet':
                     hidden_channels=args.hidden_channels, 
                     num_radial=args.num_radial, 
                     y_mean=y_mean, y_std=y_std)
+    
+elif args.model_name == 'SEGNN':
+    model = SEGNN(pos_require_grad=True, 
+                  cutoff=args.cutoff, 
+                  num_layers=args.num_layers,
+                  hidden_features=args.hidden_channels, 
+                  num_radial=args.num_radial,
+                  y_mean=y_mean, y_std=y_std)
     
 elif args.model_name == 'leftnetCHA':
     model = LEFTNetCHA(pos_require_grad=True, 
