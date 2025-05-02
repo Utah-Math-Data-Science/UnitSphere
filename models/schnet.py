@@ -182,12 +182,13 @@ class SchNet(torch.nn.Module):
         if self.energy_and_force:
             pos.requires_grad_()
 
-        edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
+        #edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
+        edge_index = batch_data.edge_index
         row, col = edge_index
         dist = (pos[row] - pos[col]).norm(dim=-1)
         dist_emb = self.dist_emb(dist)
 
-        v = self.init_v(z)
+        v = self.init_v(z.to(torch.long))
 
         for update_e, update_v in zip(self.update_es, self.update_vs):
             e = update_e(v, dist, dist_emb, edge_index)

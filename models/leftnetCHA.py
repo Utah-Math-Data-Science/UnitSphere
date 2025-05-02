@@ -7,7 +7,7 @@ from torch.nn import Embedding
 from torch_geometric.nn import radius_graph
 from torch_geometric.nn.conv import MessagePassing
 from torch_scatter import scatter, scatter_min
-from SCHull_features import angle_emb_hull, torsion_emb_hull
+from comenet_features import angle_emb, torsion_emb
 
 def nan_to_num(vec, num=0.0):
     idx = torch.isnan(vec)
@@ -568,9 +568,9 @@ class LEFTNetCHA(torch.nn.Module):
             nn.Sigmoid())
         
         self.neighbor_emb = NeighborEmb(hidden_channels)
-        self.feature_emb_hull = torsion_emb_hull(num_radial=1, 
+        self.feature_emb_hull = torsion_emb(num_radial=2, 
                                                  num_spherical=2)
-        self.angle_emb_hull = angle_emb_hull(num_radial=1, 
+        self.angle_emb_hull = angle_emb(num_radial=1, 
                                                 num_spherical=2)
         self.S_vector = S_vector(hidden_channels)
         self.isangle_emb_hull = isangle_emb_hull
@@ -632,16 +632,17 @@ class LEFTNetCHA(torch.nn.Module):
                 layer.reset_parameters()
 
     def forward(self, batch_data):
-        z, pos, batch = batch_data.z, batch_data.posc, batch_data.batch
+        z, pos, batch = batch_data.z, batch_data.pos, batch_data.batch
         if self.pos_require_grad:
             pos.requires_grad_()
         
         # embed z
-        z_emb = self.z_emb(z)
+        z_emb = self.z_emb(z.long())
         
         # construct edges based on the cutoff value
         edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
         i, j = edge_index
+        print(edge_index.shape)
         
         # embed pair-wise distance
         dist = torch.norm(pos[i]-pos[j], dim=-1)
@@ -653,7 +654,7 @@ class LEFTNetCHA(torch.nn.Module):
 
         # init invariant node features
         # shape: (num_nodes, hidden_channels)
-        s = self.neighbor_emb(z, z_emb, edge_index, radial_hidden)
+        s = self.neighbor_emb(z.long(), z_emb, edge_index, radial_hidden)
 
         # init equivariant node features
         # shape: (num_nodes, 3, hidden_channels)
@@ -695,7 +696,7 @@ class LEFTNetCHA(torch.nn.Module):
         A_i_j = torch.cat((A_i_j, radial_hidden, radial_emb), dim=-1)
         
         # convex hull feature embedding
-        edge_index_hull, edge_attr_hull, r = batch_data.edge_index_hull, batch_data.edge_attr_hull, batch_data.posr
+        edge_index_hull, edge_attr_hull, r = batch_data.edge_index_hull, batch_data.edge_attr_hull, batch_data.pos
         # fea1_hull, fea2_hull = self.embhull(r, edge_attr_hull, edge_index_hull)
         dist_hull = edge_attr_hull[:, 0]
         vecs_hull = edge_attr_hull[:, 1:]

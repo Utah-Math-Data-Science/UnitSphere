@@ -247,11 +247,11 @@ class EquiOutput(nn.Module):
 
         self.output_network = nn.ModuleList(
             [
-                # GatedEquivariantBlock(
-                #     hidden_channels,
-                #     hidden_channels // 2,
-                # ),
-                GatedEquivariantBlock(hidden_channels, 1),
+                GatedEquivariantBlock(
+                    hidden_channels,
+                    hidden_channels // 2,
+                ),
+                GatedEquivariantBlock(hidden_channels//2, 1),
             ]
         )
 
@@ -437,6 +437,7 @@ class LEFTNet(torch.nn.Module):
         # node_frame shape: (num_nodes, 3, 3)
         node_frame = torch.cat((node_diff.unsqueeze(-1), node_cross.unsqueeze(-1), node_vertical.unsqueeze(-1)), dim=-1)
 
+
         # LSE: local 3D substructure encoding
         # S_i_j shape: (num_nodes, 3, hidden_channels)
         S_i_j = self.S_vector(s, edge_diff.unsqueeze(-1), edge_index, radial_hidden)
@@ -472,6 +473,7 @@ class LEFTNet(torch.nn.Module):
         s = self.last_layer(s)
         s = scatter(s, batch, dim=0)
         s = s * self.y_std + self.y_mean
+        # import pdb; pdb.set_trace() 
         if self.pos_require_grad:
             return s, forces
         return s
